@@ -14,6 +14,7 @@ SCD30 airSensor;
 
 static char errorMessage[64];
 static int16_t error;
+uint32_t auto_clean_interval = 4 * 24 * 3600;  // 4 days in seconds
 
 void setup() {
   Serial.begin(115200);
@@ -57,8 +58,16 @@ void setup() {
     Serial.println(errorMessage);
   }
 
+  // Set auto-cleaning interval
+  error = sps.writeAutoCleaningInterval(auto_clean_interval);
+  if (error != NO_ERROR) {
+    Serial.print("SPS30 error setting auto-clean interval: ");
+    errorToString(error, errorMessage, sizeof errorMessage);
+    Serial.println(errorMessage);
+  }
+
   // Start SPS30 measurement
-  error = sps.startMeasurement(SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_UINT16);
+  error = sps.startMeasurement(SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_FLOAT);
   if (error != NO_ERROR) {
     Serial.print("SPS30 error starting measurement: ");
     errorToString(error, errorMessage, sizeof errorMessage);
@@ -90,13 +99,13 @@ void loop() {
     errorToString(error, errorMessage, sizeof errorMessage);
     Serial.println(errorMessage);
   } else if (dataReadyFlag) {
-    uint16_t mc1p0 = 0, mc2p5 = 0, mc4p0 = 0, mc10p0 = 0;
-    uint16_t nc0p5 = 0, nc1p0 = 0, nc2p5 = 0, nc4p0 = 0, nc10p0 = 0;
-    uint16_t typicalParticleSize = 0;
+    float mc1p0 = 0, mc2p5 = 0, mc4p0 = 0, mc10p0 = 0;
+    float nc0p5 = 0, nc1p0 = 0, nc2p5 = 0, nc4p0 = 0, nc10p0 = 0;
+    float typicalParticleSize = 0;
 
-    error = sps.readMeasurementValuesUint16(mc1p0, mc2p5, mc4p0, mc10p0,
-                                             nc0p5, nc1p0, nc2p5, nc4p0,
-                                             nc10p0, typicalParticleSize);
+    error = sps.readMeasurementValuesFloat(mc1p0, mc2p5, mc4p0, mc10p0,
+                                            nc0p5, nc1p0, nc2p5, nc4p0,
+                                            nc10p0, typicalParticleSize);
     if (error != NO_ERROR) {
       Serial.print("SPS30 error reading measurement: ");
       errorToString(error, errorMessage, sizeof errorMessage);
