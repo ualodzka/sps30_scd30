@@ -1,104 +1,134 @@
-#include <sps30.h>
+#include <Arduino.h>
+#include <SensirionI2cSps30.h>
 #include <Wire.h>
 
-#include "SparkFun_SCD30_Arduino_Library.h"  //Click here to get the library: http://librarymanager/All#SparkFun_SCD30
+#include "SparkFun_SCD30_Arduino_Library.h"
 
+#ifdef NO_ERROR
+#undef NO_ERROR
+#endif
+#define NO_ERROR 0
+
+SensirionI2cSps30 sps;
 SCD30 airSensor;
 
-
-int16_t ret;
-uint8_t auto_clean_days = 4;
-uint32_t auto_clean;
-struct sps30_measurement m;
-char serial[SPS30_MAX_SERIAL_LEN];
-uint16_t data_ready;
+static char errorMessage[64];
+static int16_t error;
 
 void setup() {
   Serial.begin(115200);
+  while (!Serial) {
+    delay(100);
+  }
 
-  //scd init
   Wire.begin();
+  Wire.setWireTimeout(25000);  // 25ms timeout (default 1ms is too short for SPS30)
 
+  // SPS30 init
+  sps.begin(Wire, SPS30_I2C_ADDR_69);
+
+  // Reset SPS30
+  sps.deviceReset();
+  delay(100);
+
+  // Read serial number to verify I2C communication
+  int8_t serialNumber[32] = {0};
+  error = sps.readSerialNumber(serialNumber, 32);
+  if (error != NO_ERROR) {
+    Serial.print("SPS30 error reading serial: ");
+    errorToString(error, errorMessage, sizeof errorMessage);
+    Serial.println(errorMessage);
+  } else {
+    Serial.print("SPS30 serial: ");
+    Serial.println((const char*)serialNumber);
+  }
+
+  // Read firmware version
+  uint8_t fwMajor, fwMinor;
+  error = sps.readFirmwareVersion(fwMajor, fwMinor);
+  if (error == NO_ERROR) {
+    Serial.print("SPS30 firmware: ");
+    Serial.print(fwMajor);
+    Serial.print(".");
+    Serial.println(fwMinor);
+  } else {
+    Serial.print("SPS30 error reading firmware version: ");
+    errorToString(error, errorMessage, sizeof errorMessage);
+    Serial.println(errorMessage);
+  }
+
+  // Start SPS30 measurement
+  error = sps.startMeasurement(SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_UINT16);
+  if (error != NO_ERROR) {
+    Serial.print("SPS30 error starting measurement: ");
+    errorToString(error, errorMessage, sizeof errorMessage);
+    Serial.println(errorMessage);
+  } else {
+    Serial.println("SPS30 measurement started");
+  }
+
+  // SCD30 init
   if (airSensor.begin() == false) {
-    Serial.println("Air sensor not detected. Please check wiring. Freezing...");
+    Serial.println("SCD30 not detected. Please check wiring. Freezing...");
     while (1)
       ;
   }
+  Serial.println("SCD30 detected");
 
-  //start sps init
-  sensirion_i2c_init();
-  while (sps30_probe() != 0) {
-    Serial.print("SPS sensor probing failed\n");
-    delay(500);
-  }
-  ret = sps30_set_fan_auto_cleaning_interval_days(auto_clean_days);  // Used to drive the fan for pre-defined sequence every X days
-  if (ret) {
-    Serial.print("error setting the auto-clean interval: ");
-    Serial.println(ret);
-  }
-  ret = sps30_start_measurement();  // Configures device ready for read every 1 second
-  if (ret < 0) {
-    Serial.print("error starting measurement\n");
-  }
-  delay(1000);
+  delay(2000);
 }
 
 void loop() {
 
-  sps30_start_measurement();  // Start of loop start fan to flow air past laser sensor
-  delay(2000);                //Wait 1 second while fan is active before read data
+  delay(2000);
 
-  do {
-    ret = sps30_read_data_ready(&data_ready);  // Reads the last data from the sensor
-    if (ret < 0) {
-      Serial.print("error reading data-ready flag: ");
-      Serial.println(ret);
-    } else if (!data_ready)
-      Serial.print("data not ready, no new measurement available\n");
-    else
-      break;
-    delay(100); /* retry in 100ms */
-  } while (1);
-  ret = sps30_read_measurement(&m);  // Ask SPS30 for measurments over I2C, returns 10 sets of data
+  // Read SPS30
+  uint16_t dataReadyFlag = 0;
+  error = sps.readDataReadyFlag(dataReadyFlag);
+  if (error != NO_ERROR) {
+    Serial.print("SPS30 error reading data-ready flag: ");
+    errorToString(error, errorMessage, sizeof errorMessage);
+    Serial.println(errorMessage);
+  } else if (dataReadyFlag) {
+    uint16_t mc1p0 = 0, mc2p5 = 0, mc4p0 = 0, mc10p0 = 0;
+    uint16_t nc0p5 = 0, nc1p0 = 0, nc2p5 = 0, nc4p0 = 0, nc10p0 = 0;
+    uint16_t typicalParticleSize = 0;
 
-  Serial.print("PM  1.0: ");
-  Serial.println(m.mc_1p0);
-  Serial.print("PM  2.5: ");
-  Serial.println(m.mc_2p5);
-  Serial.print("PM  4.0: ");
-  Serial.println(m.mc_4p0);
-  Serial.print("PM 10.0: ");
-  Serial.println(m.mc_10p0);
-  //Serial.print("NC  0.5: ");
-  //Serial.println(m.nc_0p5);
-  //Serial.print("NC  1.0: ");
-  //Serial.println(m.nc_1p0);
-  //Serial.print("NC  2.5: ");
-  //Serial.println(m.nc_2p5);
-  //Serial.print("NC  4.0: ");
-  // Serial.println(m.nc_4p0);
-  // Serial.print("NC 10.0: ");
-  // Serial.println(m.nc_10p0);
-  Serial.print("Typical partical size: ");
-  Serial.println(m.typical_particle_size);
-  Serial.println();
+    error = sps.readMeasurementValuesUint16(mc1p0, mc2p5, mc4p0, mc10p0,
+                                             nc0p5, nc1p0, nc2p5, nc4p0,
+                                             nc10p0, typicalParticleSize);
+    if (error != NO_ERROR) {
+      Serial.print("SPS30 error reading measurement: ");
+      errorToString(error, errorMessage, sizeof errorMessage);
+      Serial.println(errorMessage);
+    } else {
+      Serial.print("PM  1.0: ");
+      Serial.println(mc1p0);
+      Serial.print("PM  2.5: ");
+      Serial.println(mc2p5);
+      Serial.print("PM  4.0: ");
+      Serial.println(mc4p0);
+      Serial.print("PM 10.0: ");
+      Serial.println(mc10p0);
+      Serial.print("Typical particle size: ");
+      Serial.println(typicalParticleSize);
+    }
+  } else {
+    Serial.println("SPS30 data not ready");
+  }
 
-  sps30_stop_measurement();  //Disables Fan before 11 seconds gap
-
+  // Read SCD30
   if (airSensor.dataAvailable()) {
     Serial.print("co2(ppm):");
     Serial.print(airSensor.getCO2());
-
     Serial.print(" temp(C):");
     Serial.print(airSensor.getTemperature(), 1);
-
     Serial.print(" humidity(%):");
     Serial.print(airSensor.getHumidity(), 1);
-
     Serial.println();
-  } else
-    Serial.println("Waiting for new data");
+  } else {
+    Serial.println("SCD30 waiting for data");
+  }
 
   Serial.println();
-  delay(3000);
 }
