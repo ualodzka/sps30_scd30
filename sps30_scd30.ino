@@ -84,6 +84,9 @@ void setup() {
   }
   Serial.println("SCD30 detected");
 
+  Serial.println("DATA_START");
+  Serial.println("pm25,co2,temp,humidity");
+
   delay(2000);
 }
 
@@ -91,11 +94,15 @@ void loop() {
 
   delay(2000);
 
+  float pm25 = -1;
+  int co2 = -1;
+  float temp = -1, humidity = -1;
+
   // Read SPS30
   uint16_t dataReadyFlag = 0;
   error = sps.readDataReadyFlag(dataReadyFlag);
   if (error != NO_ERROR) {
-    Serial.print("SPS30 error reading data-ready flag: ");
+    Serial.print("# SPS30 error reading data-ready flag: ");
     errorToString(error, errorMessage, sizeof errorMessage);
     Serial.println(errorMessage);
   } else if (dataReadyFlag) {
@@ -107,37 +114,34 @@ void loop() {
                                             nc0p5, nc1p0, nc2p5, nc4p0,
                                             nc10p0, typicalParticleSize);
     if (error != NO_ERROR) {
-      Serial.print("SPS30 error reading measurement: ");
+      Serial.print("# SPS30 error reading measurement: ");
       errorToString(error, errorMessage, sizeof errorMessage);
       Serial.println(errorMessage);
     } else {
-      Serial.print("PM  1.0: ");
-      Serial.println(mc1p0);
-      Serial.print("PM  2.5: ");
-      Serial.println(mc2p5);
-      Serial.print("PM  4.0: ");
-      Serial.println(mc4p0);
-      Serial.print("PM 10.0: ");
-      Serial.println(mc10p0);
-      Serial.print("Typical particle size: ");
-      Serial.println(typicalParticleSize);
+      pm25 = mc2p5;
     }
   } else {
-    Serial.println("SPS30 data not ready");
+    Serial.println("# SPS30 data not ready");
   }
 
   // Read SCD30
   if (airSensor.dataAvailable()) {
-    Serial.print("co2(ppm):");
-    Serial.print(airSensor.getCO2());
-    Serial.print(" temp(C):");
-    Serial.print(airSensor.getTemperature(), 1);
-    Serial.print(" humidity(%):");
-    Serial.print(airSensor.getHumidity(), 1);
-    Serial.println();
+    co2 = airSensor.getCO2();
+    temp = airSensor.getTemperature();
+    humidity = airSensor.getHumidity();
   } else {
-    Serial.println("SCD30 waiting for data");
+    Serial.println("# SCD30 waiting for data");
   }
 
-  Serial.println();
+  // Output CSV line (only when at least one sensor has data)
+  if (pm25 >= 0 || co2 >= 0) {
+    if (pm25 >= 0) Serial.print(pm25);
+    Serial.print(",");
+    if (co2 >= 0) Serial.print(co2);
+    Serial.print(",");
+    if (temp >= 0) Serial.print(temp, 1);
+    Serial.print(",");
+    if (humidity >= 0) Serial.print(humidity, 1);
+    Serial.println();
+  }
 }
