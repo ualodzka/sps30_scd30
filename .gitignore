@@ -5,3 +5,14 @@ dist/
 
 # Windows
 nul
+
+# Secrets (WiFi/MQTT credentials)
+secrets.h
+
+# Compiled binaries
+*.exe
+
+# Home Assistant data (contains tokens/secrets)
+docker/homeassistant/
+docker/mosquitto/data/
+docker/mosquitto/log/

@@ -1,0 +1,21 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+    command: sh -c "echo 'listener 1883' > /tmp/m.conf && echo 'allow_anonymous true' >> /tmp/m.conf && mosquitto -c /tmp/m.conf -v"
+    restart: unless-stopped
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    ports:
+      - "8123:8123"
+    volumes:
+      - ./homeassistant:/config
+    environment:
+      - TZ=Europe/Moscow
+    restart: unless-stopped
+    depends_on:
+      - mosquitto

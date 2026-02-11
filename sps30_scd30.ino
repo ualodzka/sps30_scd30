@@ -1,13 +1,40 @@
 #include <Arduino.h>                // базовая библиотека Arduino
 #include <SensirionI2cSps30.h>      // библиотека для датчика пыли SPS30
 #include <Wire.h>                   // библиотека для I2C (провода SDA/SCL)
+#include <WiFiS3.h>                 // WiFi для Arduino R4 WiFi
+#include <PubSubClient.h>           // MQTT клиент
 
 #include "SparkFun_SCD30_Arduino_Library.h"  // библиотека для датчика CO2 SCD30
+#include "secrets.h"                // WiFi credentials (не в git!)
 
 #ifdef NO_ERROR                     // если NO_ERROR уже определён где-то в библиотеках —
 #undef NO_ERROR                     // удаляем старое определение,
 #endif
 #define NO_ERROR 0                  // и задаём своё: 0 = нет ошибки
+
+// ===== MQTT настройки =====
+const char* MQTT_SERVER = "broker.hivemq.com";  // публичный тестовый брокер
+// const char* MQTT_SERVER = "192.168.1.12";    // IP адрес компьютера с Home Assistant
+const int MQTT_PORT = 1883;                      // порт MQTT брокера
+
+// Уникальный ID устройства (чтобы не пересекаться с другими на публичном брокере)
+#define DEVICE_ID "levl_x7k9m2"
+
+// MQTT топики для Home Assistant (автообнаружение)
+const char* MQTT_TOPIC_PM25 = DEVICE_ID "/sensor/pm25/state";
+const char* MQTT_TOPIC_CO2 = DEVICE_ID "/sensor/co2/state";
+const char* MQTT_TOPIC_TEMP = DEVICE_ID "/sensor/temperature/state";
+const char* MQTT_TOPIC_HUMIDITY = DEVICE_ID "/sensor/humidity/state";
+
+// Топики для автоконфигурации Home Assistant (уникальный префикс!)
+#define DISCOVERY_PREFIX DEVICE_ID "_ha"
+const char* MQTT_CONFIG_PM25 = DISCOVERY_PREFIX "/sensor/" DEVICE_ID "_pm25/config";
+const char* MQTT_CONFIG_CO2 = DISCOVERY_PREFIX "/sensor/" DEVICE_ID "_co2/config";
+const char* MQTT_CONFIG_TEMP = DISCOVERY_PREFIX "/sensor/" DEVICE_ID "_temp/config";
+const char* MQTT_CONFIG_HUMIDITY = DISCOVERY_PREFIX "/sensor/" DEVICE_ID "_humidity/config";
+
+WiFiClient wifiClient;              // WiFi клиент
+PubSubClient mqtt(wifiClient);      // MQTT клиент поверх WiFi
 
 SensirionI2cSps30 sps;              // объект для работы с датчиком пыли SPS30
 SCD30 airSensor;                    // объект для работы с датчиком CO2 SCD30
@@ -15,6 +42,154 @@ SCD30 airSensor;                    // объект для работы с да�
 static char errorMessage[64];       // буфер для текста ошибки (макс 64 символа)
 static int16_t error;               // код ошибки, возвращаемый функциями SPS30
 uint32_t auto_clean_interval = 4 * 24 * 3600;  // интервал автоочистки вентилятора: 4 дня в секундах
+
+// Подключение к WiFi
+void connectWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // Ждём подключения к WiFi
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi connection FAILED!");
+    return;
+  }
+
+  // Ждём получения IP адреса (не 0.0.0.0)
+  Serial.print("Waiting for IP");
+  attempts = 0;
+  while (WiFi.localIP() == IPAddress(0, 0, 0, 0) && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+
+  if (WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+    Serial.print("Connected! IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("Failed to get IP address!");
+  }
+}
+
+// Подключение к MQTT брокеру
+void connectMQTT() {
+  Serial.print("MQTT server: ");
+  Serial.print(MQTT_SERVER);
+  Serial.print(":");
+  Serial.println(MQTT_PORT);
+
+  // Тест TCP соединения
+  Serial.print("Testing TCP connection... ");
+  WiFiClient testClient;
+  if (testClient.connect(MQTT_SERVER, MQTT_PORT)) {
+    Serial.println("TCP OK!");
+    testClient.stop();
+  } else {
+    Serial.println("TCP FAILED!");
+  }
+
+  mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+  mqtt.setKeepAlive(60);
+
+  Serial.print("Connecting to MQTT");
+  int attempts = 0;
+  while (!mqtt.connected() && attempts < 5) {
+    Serial.print(".");
+    if (mqtt.connect(DEVICE_ID)) {
+      Serial.println(" connected!");
+
+      // Отправляем конфигурацию для автообнаружения Home Assistant
+      publishHomeAssistantConfig();
+    } else {
+      int state = mqtt.state();
+      Serial.print(" error=");
+      Serial.print(state);
+      delay(2000);
+      attempts++;
+    }
+  }
+
+  if (!mqtt.connected()) {
+    Serial.println(" FAILED!");
+  }
+}
+
+// Публикация конфигурации для автообнаружения Home Assistant
+void publishHomeAssistantConfig() {
+  char configPayload[350];
+
+  // PM2.5 конфигурация
+  snprintf(configPayload, sizeof(configPayload),
+    "{\"name\":\"PM2.5\",\"state_topic\":\"%s\",\"unit_of_measurement\":\"ug/m3\",\"device_class\":\"pm25\",\"unique_id\":\"%s_pm25\"}",
+    MQTT_TOPIC_PM25, DEVICE_ID);
+  mqtt.publish(MQTT_CONFIG_PM25, configPayload, true);
+
+  // CO2 конфигурация
+  snprintf(configPayload, sizeof(configPayload),
+    "{\"name\":\"CO2\",\"state_topic\":\"%s\",\"unit_of_measurement\":\"ppm\",\"device_class\":\"carbon_dioxide\",\"unique_id\":\"%s_co2\"}",
+    MQTT_TOPIC_CO2, DEVICE_ID);
+  mqtt.publish(MQTT_CONFIG_CO2, configPayload, true);
+
+  // Температура конфигурация
+  snprintf(configPayload, sizeof(configPayload),
+    "{\"name\":\"Temperature\",\"state_topic\":\"%s\",\"unit_of_measurement\":\"C\",\"device_class\":\"temperature\",\"unique_id\":\"%s_temp\"}",
+    MQTT_TOPIC_TEMP, DEVICE_ID);
+  mqtt.publish(MQTT_CONFIG_TEMP, configPayload, true);
+
+  // Влажность конфигурация
+  snprintf(configPayload, sizeof(configPayload),
+    "{\"name\":\"Humidity\",\"state_topic\":\"%s\",\"unit_of_measurement\":\"%%\",\"device_class\":\"humidity\",\"unique_id\":\"%s_humidity\"}",
+    MQTT_TOPIC_HUMIDITY, DEVICE_ID);
+  mqtt.publish(MQTT_CONFIG_HUMIDITY, configPayload, true);
+
+  Serial.println("Home Assistant auto-discovery config sent");
+}
+
+// Публикация данных в MQTT
+void publishSensorData(float pm25, int co2, float temp, float humidity) {
+  if (!mqtt.connected()) {
+    connectMQTT();
+  }
+
+  if (mqtt.connected()) {
+    char payload[16];
+
+    if (pm25 >= 0) {
+      snprintf(payload, sizeof(payload), "%.1f", pm25);
+      mqtt.publish(MQTT_TOPIC_PM25, payload);
+    }
+
+    if (co2 >= 0) {
+      snprintf(payload, sizeof(payload), "%d", co2);
+      mqtt.publish(MQTT_TOPIC_CO2, payload);
+    }
+
+    if (temp >= 0) {
+      snprintf(payload, sizeof(payload), "%.1f", temp);
+      mqtt.publish(MQTT_TOPIC_TEMP, payload);
+    }
+
+    if (humidity >= 0) {
+      snprintf(payload, sizeof(payload), "%.1f", humidity);
+      mqtt.publish(MQTT_TOPIC_HUMIDITY, payload);
+    }
+
+    Serial.println("MQTT: data published");
+  }
+
+  mqtt.loop();  // обработка MQTT
+}
 
 void setup() {
   Serial.begin(115200);             // запускаем Serial-порт на скорости 115200 бод
@@ -89,6 +264,10 @@ void setup() {
   }
   Serial.println("SCD30 detected");  // SCD30 найден и готов к работе
 
+  // Подключение к WiFi и MQTT
+  connectWiFi();
+  connectMQTT();
+
   Serial.println("DATA_START");      // маркер для Python-скрипта: дальше пойдут данные
   Serial.println("pm25,co2,temp,humidity");  // заголовок CSV-таблицы
 
@@ -161,5 +340,8 @@ void loop() {
     Serial.print(",");
     if (humidity >= 0) Serial.print(humidity, 1);  // влажность с 1 знаком после запятой
     Serial.println();                      // конец строки
+
+    // Отправляем данные в Home Assistant через MQTT
+    publishSensorData(pm25, co2, temp, humidity);
   }
 }
