@@ -1,6 +1,6 @@
 """Real-time plotting of SPS30 + SCD30 sensor data from Arduino Serial.
 
-Usage: python plot.py COM3
+Usage: python plot.py [COM port]
 Dependencies: pip install pyserial matplotlib
 """
 
@@ -8,18 +8,48 @@ import sys
 from collections import deque
 
 import serial
+import serial.tools.list_ports
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 BAUD = 115200
 MAXLEN = 1500
 
-if len(sys.argv) < 2:
-    print(f"Usage: python {sys.argv[0]} <COM port>")
-    sys.exit(1)
 
-port = sys.argv[1]
-ser = serial.Serial(port, BAUD, timeout=1)
+def select_port():
+    """Показать список доступных COM-портов и попросить выбрать."""
+    ports = list(serial.tools.list_ports.comports())
+    if not ports:
+        print("Не найдено ни одного COM-порта!")
+        input("Нажмите Enter для выхода...")
+        sys.exit(1)
+
+    print("Доступные COM-порты:")
+    for i, p in enumerate(ports, 1):
+        print(f"  {i}. {p.device} - {p.description}")
+
+    while True:
+        try:
+            choice = input(f"Выберите порт (1-{len(ports)}): ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(ports):
+                return ports[idx].device
+        except ValueError:
+            pass
+        print("Неверный выбор, попробуйте ещё раз.")
+
+
+if len(sys.argv) >= 2:
+    port = sys.argv[1]
+else:
+    port = select_port()
+
+try:
+    ser = serial.Serial(port, BAUD, timeout=1)
+except serial.SerialException as e:
+    print(f"Ошибка открытия порта {port}: {e}")
+    input("Нажмите Enter для выхода...")
+    sys.exit(1)
 
 print("Listening for sensor data...")
 

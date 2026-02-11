@@ -61,6 +61,27 @@ void setup() {
     Serial.println(errorMessage);
   }
 
+  // стартовая продувка вентилятора для очистки от накопившейся пыли
+  // fan cleaning работает только в режиме измерения, поэтому сначала запускаем измерение
+  error = sps.startMeasurement(SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_FLOAT);
+  if (error != NO_ERROR) {
+    Serial.print("SPS30 error starting measurement for cleaning: ");
+    errorToString(error, errorMessage, sizeof errorMessage);
+    Serial.println(errorMessage);
+  } else {
+    delay(1000);  // даём вентилятору раскрутиться
+    error = sps.startFanCleaning();
+    if (error != NO_ERROR) {
+      Serial.print("SPS30 error starting fan cleaning: ");
+      errorToString(error, errorMessage, sizeof errorMessage);
+      Serial.println(errorMessage);
+    } else {
+      Serial.println("SPS30 fan cleaning started");
+      delay(10000);  // ждём 10 секунд пока очистка завершится
+    }
+    sps.stopMeasurement();  // останавливаем измерение после очистки
+  }
+
   if (airSensor.begin() == false) {  // инициализируем SCD30; если не найден —
     Serial.println("SCD30 not detected. Please check wiring. Freezing...");
     while (1)                        // зависаем навсегда (дальше работать без датчика нет смысла)
